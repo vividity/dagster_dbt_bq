@@ -1,4 +1,4 @@
-.PHONY: help build up down restart logs shell dbt-deps seed dbt-build dbt-test dbt-parse defs test lint clean
+.PHONY: help build up down restart logs shell dbt dbt-deps seed dbt-build dbt-test dbt-parse defs test lint clean
 
 # The Docker Desktop context is often selected but not running; the system
 # daemon at /var/run/docker.sock is the one that works here.
@@ -44,6 +44,9 @@ shell: ## Open a shell in the app image
 
 dbt-deps: ## Install dbt packages into dbt/dbt_packages (do this first)
 	$(RUN) dbt deps $(DBT_FLAGS)
+
+dbt: ## Run any dbt command: make dbt ARGS="build --select stg_orders+"
+	$(RUN) dbt $(ARGS) $(DBT_FLAGS)
 
 dbt-parse: ## Parse the dbt project — no warehouse connection needed
 	$(RUN) dbt parse $(DBT_FLAGS)

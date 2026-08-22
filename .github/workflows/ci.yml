@@ -1,0 +1,174 @@
+name: CI
+
+# `closed` is included so PR datasets get torn down on merge or abandon; the
+# build jobs below all exclude that action.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+permissions:
+  contents: read
+  id-token: write   # mint the OIDC token for Workload Identity Federation
+  actions: read     # read the prod manifest artifact from a previous run
+
+env:
+  GCP_PROJECT: dbtbq-500412
+  DBT_BIGQUERY_PROJECT: dbtbq-500412
+  DBT_BIGQUERY_LOCATION: US
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # No credentials at all. Every env_var() in profiles.yml has a default, so the
+  # graph compiles without touching BigQuery.
+  # ---------------------------------------------------------------------------
+  quality:
+    name: Lint, types, tests, dbt parse
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-image
+
+      - run: make test
+      - run: make dbt-deps
+      - run: make dbt-parse
+
+  # ---------------------------------------------------------------------------
+  # main -> the production build that PRs defer to. Publishes the manifest.
+  # ---------------------------------------------------------------------------
+  prod:
+    name: Production build (dbt_prod)
+    if: github.event_name == 'push'
+    needs: quality
+    runs-on: ubuntu-latest
+    env:
+      DBT_BIGQUERY_DATASET: dbt_prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-image
+
+      - uses: google-github-actions/auth@v2
+        id: auth
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - run: make dbt-deps
+      - name: Build everything
+        env:
+          DBT_BIGQUERY_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: make dbt ARGS="build --target ci"
+
+      # This artifact is the state PRs compare against and defer to.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dbt-manifest-prod
+          path: dbt/target/manifest.json
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Slim CI: build only what changed plus its descendants, defer the rest to the
+  # production manifest, into a dataset namespaced to this PR.
+  # ---------------------------------------------------------------------------
+  pr:
+    name: Slim CI build
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
+    needs: quality
+    runs-on: ubuntu-latest
+    env:
+      DBT_BIGQUERY_DATASET: dbt_ci_pr_${{ github.event.pull_request.number }}
+    steps:
+      # Slim CI diffs against prod state, so it needs real history, not a
+      # single-commit shallow clone.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/build-image
+
+      - uses: google-github-actions/auth@v2
+        id: auth
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      # Pinned to the latest successful *main* run. Taking merely the newest
+      # artifact of this name would let one PR defer to another PR's state.
+      - name: Fetch production manifest
+        id: manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dbt/prod-manifest
+          RUN_ID=$(gh run list --workflow ci.yml --branch main --status success \
+                     --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || true)
+          if [ -n "$RUN_ID" ]; then
+            gh run download "$RUN_ID" --name dbt-manifest-prod --dir dbt/prod-manifest || true
+          fi
+          if [ -f dbt/prod-manifest/manifest.json ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No production manifest yet — falling back to a full build."
+          fi
+
+      - run: make dbt-deps
+
+      - name: Build changed models and their descendants
+        if: steps.manifest.outputs.found == 'true'
+        env:
+          DBT_BIGQUERY_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          # --state resolves relative to --project-dir (dbt/), so this points
+          # at dbt/prod-manifest despite the bare name.
+          make dbt ARGS="build --target ci \
+            --select state:modified+ \
+            --defer --state prod-manifest"
+
+      - name: Full build (no prod state to compare against)
+        if: steps.manifest.outputs.found == 'false'
+        env:
+          DBT_BIGQUERY_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: make dbt ARGS="build --target ci"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dbt-target-pr-${{ github.event.pull_request.number }}
+          path: dbt/target/
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Without this every PR leaves BigQuery datasets behind for good.
+  # ---------------------------------------------------------------------------
+  cleanup:
+    name: Drop PR datasets
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: google-github-actions/auth@v2
+        id: auth
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Delete dbt_ci_pr_${{ github.event.pull_request.number }}*
+        env:
+          TOKEN: ${{ steps.auth.outputs.access_token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          for suffix in "" "_staging" "_marts"; do
+            DS="dbt_ci_pr_${PR}${suffix}"
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+              -H "Authorization: Bearer ${TOKEN}" \
+              "https://bigquery.googleapis.com/bigquery/v2/projects/${GCP_PROJECT}/datasets/${DS}?deleteContents=true")
+            # 404 just means this PR never created that layer.
+            case "$CODE" in
+              204|404) echo "$DS -> $CODE ok" ;;
+              *)       echo "::warning::$DS -> HTTP $CODE (not deleted)" ;;
+            esac
+          done

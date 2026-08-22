@@ -222,3 +222,6 @@ dbt/package-lock.concurrent-update-lock
 *service-account*.json
 *-credentials.json
 secrets/
+
+# Production manifest downloaded by Slim CI for --defer / state:modified
+dbt/prod-manifest/

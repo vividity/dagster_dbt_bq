@@ -16,6 +16,9 @@ x-dagster-common: &dagster-common
     DBT_BIGQUERY_PROJECT: "${GCP_PROJECT:-your-gcp-project}"
     DBT_BIGQUERY_DATASET: "${DBT_BIGQUERY_DATASET:-dbt_dev}"
     DBT_BIGQUERY_LOCATION: "${DBT_BIGQUERY_LOCATION:-US}"
+    # Short-lived token used by the `ci` profile target in GitHub Actions.
+    # Empty locally, where the `dev` target uses the mounted key instead.
+    DBT_BIGQUERY_TOKEN: "${DBT_BIGQUERY_TOKEN:-}"
     # Service-account key, mounted read-only from outside the repo. The key
     # itself never enters the working tree, so it cannot be committed.
     DBT_BIGQUERY_KEYFILE: /var/secrets/google/sa-key.json

@@ -1,20 +1,38 @@
 # Repo-local dbt profile, selected by --profiles-dir dbt (see the Makefile).
 #
-# Auth is a service account. The key lives OUTSIDE this repo
-# (~/.config/dagster-dbt-bq/sa-key.json by default) and is bind-mounted into the
-# container read-only at /var/secrets/google, so no credential can ever reach
-# the working tree. Only the path arrives here, via DBT_BIGQUERY_KEYFILE.
+# Every env_var() here carries a default. Without one, `dbt parse` fails outright
+# with "Env var required but not provided" — which would break every
+# credential-free CI step, including plain graph validation. Keep the defaults.
 bq_analytics:
   target: dev
   outputs:
+    # Local development. Auth is a service account whose key lives OUTSIDE this
+    # repo (~/.config/dagster-dbt-bq/sa-key.json) and is bind-mounted read-only
+    # at /var/secrets/google. Only the path travels through config.
     dev:
       type: bigquery
       method: service-account
-      keyfile: "{{ env_var('DBT_BIGQUERY_KEYFILE') }}"
+      keyfile: "{{ env_var('DBT_BIGQUERY_KEYFILE', '/var/secrets/google/sa-key.json') }}"
       project: "{{ env_var('DBT_BIGQUERY_PROJECT', 'your-gcp-project') }}"
       dataset: "{{ env_var('DBT_BIGQUERY_DATASET', 'dbt_dev') }}"
       location: "{{ env_var('DBT_BIGQUERY_LOCATION', 'US') }}"
       threads: 4
+      priority: interactive
+      job_execution_timeout_seconds: 300
+      job_retries: 1
+
+    # GitHub Actions. Workload Identity Federation hands the job a short-lived
+    # access token — an *external account* credential, which `method:
+    # service-account` cannot read, hence a separate target. `oauth-secrets`
+    # accepts a bare token with no refresh token, which is all a <1h CI job needs.
+    ci:
+      type: bigquery
+      method: oauth-secrets
+      token: "{{ env_var('DBT_BIGQUERY_TOKEN', '') }}"
+      project: "{{ env_var('DBT_BIGQUERY_PROJECT', 'your-gcp-project') }}"
+      dataset: "{{ env_var('DBT_BIGQUERY_DATASET', 'dbt_ci') }}"
+      location: "{{ env_var('DBT_BIGQUERY_LOCATION', 'US') }}"
+      threads: 8
       priority: interactive
       job_execution_timeout_seconds: 300
       job_retries: 1

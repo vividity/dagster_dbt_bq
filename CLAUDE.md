@@ -27,6 +27,7 @@ make up            # postgres + webserver (localhost:3000) + daemon
 make defs          # list the Dagster assets/checks resolved from the dbt manifest
 make test          # ruff + mypy, then pytest
 make dbt-build     # dbt run + dbt test against BigQuery
+make dbt ARGS="build --select stg_orders+"   # any dbt subcommand
 make down          # stop; `make clean` also drops the volume and dbt artefacts
 ```
 
@@ -87,14 +88,59 @@ depends on them. Admin calls against GCP can use
 
 ## Where the data lands
 
-`dataset` is the *base* name; each layer appends its own suffix, so with
-`DBT_BIGQUERY_DATASET=dbt_dev` you get:
+`dataset` is the *base* name; each layer appends its own suffix. Three families
+exist, one per environment:
 
-| Dataset | Contents |
-| --- | --- |
-| `dbt_dev` | the three seed tables |
-| `dbt_dev_staging` | `stg_*` views |
-| `dbt_dev_marts` | `fct_orders`, `dim_customers` tables |
+| Env | Base dataset | Produces |
+| --- | --- | --- |
+| local (`dev` target) | `dbt_dev` | `dbt_dev`, `dbt_dev_staging`, `dbt_dev_marts` |
+| main branch CI (`ci` target) | `dbt_prod` | `dbt_prod`, `dbt_prod_staging`, `dbt_prod_marts` |
+| pull request (`ci` target) | `dbt_ci_pr_<n>` | dropped automatically when the PR closes |
+
+`dbt_dev` is also written by the older `~/git/dbt_bigquery` repo — both projects
+share it, so a local `dbt seed` there and here overwrite each other's raw tables.
+
+## Slim CI
+
+`.github/workflows/ci.yml`. A PR builds only what it changed plus everything
+downstream, deferring unchanged refs to the production build:
+
+```bash
+dbt build --target ci --select state:modified+ --defer --state dbt/prod-manifest
+```
+
+The manifest comes from the artifact published by the last successful **main**
+run — pinned to `--branch main` on purpose, since taking the newest artifact of
+that name would let one PR defer to another PR's state.
+
+Jobs: `quality` (no credentials — lint, mypy, pytest, `dbt parse`), `prod` (main
+push, full build into `dbt_prod`, publishes `dbt-manifest-prod`), `pr` (the slim
+build above), `cleanup` (drops the PR datasets on close).
+
+CI runs the same image and the same `make` targets as your laptop;
+`.github/actions/build-image` handles the build with GHA layer caching.
+
+**Auth is keyless.** Workload Identity Federation exchanges GitHub's OIDC token
+for short-lived GCP credentials — there are no secrets in the repository at all,
+only the variables `WIF_PROVIDER` and `WIF_SERVICE_ACCOUNT`. The provider carries
+the attribute condition `assertion.repository == 'vividity/dagster_dbt_bq'`;
+**do not remove it** — this repo is public, and without that condition any
+repository on GitHub could mint tokens for the service account.
+
+### Two profile targets, and why
+
+| Target | Method | Used by |
+| --- | --- | --- |
+| `dev` | `service-account` (mounted keyfile) | local |
+| `ci` | `oauth-secrets` (bare access token) | GitHub Actions |
+
+WIF issues an *external account* credential, which `method: service-account`
+cannot read — hence the split. `oauth-secrets` accepts a token with no refresh
+token, which is all a sub-hour CI job needs.
+
+**Every `env_var()` in `dbt/profiles.yml` must keep a default.** Without one,
+`dbt parse` fails with "Env var required but not provided", which breaks the
+credential-free `quality` job and any offline work.
 
 ## Docker context
 

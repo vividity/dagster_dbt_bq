@@ -1,0 +1,33 @@
+name: Build image
+description: >
+  Build the project image with GitHub Actions layer caching and load it under the
+  tag docker-compose.yml expects, so every `make` target reuses it instead of
+  rebuilding. Also prepares the environment those targets assume.
+
+runs:
+  using: composite
+  steps:
+    # The image creates its user from these so that bind-mounted paths stay
+    # writable. Locally that is uid 1000; the GitHub runner is not, so read it
+    # rather than assume.
+    - shell: bash
+      run: |
+        echo "APP_UID=$(id -u)" >> "$GITHUB_ENV"
+        echo "APP_GID=$(id -g)" >> "$GITHUB_ENV"
+        # docker-compose.yml mounts this read-only and hard-fails if unset. CI
+        # has no service-account key — WIF issues a token instead — so an empty
+        # directory is exactly right.
+        mkdir -p "$HOME/.config/dagster-dbt-bq"
+
+    - uses: docker/setup-buildx-action@v3
+
+    - uses: docker/build-push-action@v6
+      with:
+        context: .
+        load: true
+        tags: dagster-dbt-bq:local
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          APP_UID=${{ env.APP_UID }}
+          APP_GID=${{ env.APP_GID }}
