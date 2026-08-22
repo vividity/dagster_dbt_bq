@@ -2,7 +2,8 @@
 
 These load the real definitions, which compiles the dbt manifest, so they catch
 a broken dbt project or a mis-wired component without touching BigQuery.
-Run `make dbt-deps` once first so dbt/dbt_packages exists.
+Requires dbt/dbt_packages and dbt/target/manifest.json; `make test`
+depends on dbt-parse for the latter, and `make dbt-deps` provides the former.
 """
 
 from dagster import AssetKey

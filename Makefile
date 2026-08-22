@@ -63,7 +63,10 @@ dbt-test: ## Run the dbt tests only
 defs: ## List the Dagster definitions loaded from src/dagster_dbt_bq/defs
 	$(RUN_DB) dg list defs
 
-test: ## Python lint, types and unit tests
+# Depends on dbt-parse because the tests load Definitions, which reads
+# dbt/target/manifest.json. That file is gitignored, so on a clean checkout
+# (CI) it does not exist until something parses the project.
+test: dbt-parse ## Python lint, types and unit tests
 	$(RUN) sh -c "ruff check src tests && ruff format --check src tests && mypy"
 	$(RUN_DB) pytest -q
 

@@ -31,9 +31,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/build-image
 
-      - run: make test
+      # deps first: dbt parse fails if packages.yml is unsatisfied, and `make
+      # test` parses in order to build the manifest the tests need.
       - run: make dbt-deps
-      - run: make dbt-parse
+      - run: make test
 
   # ---------------------------------------------------------------------------
   # main -> the production build that PRs defer to. Publishes the manifest.
