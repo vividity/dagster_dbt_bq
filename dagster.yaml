@@ -1,0 +1,18 @@
+# Mounted at $DAGSTER_HOME/dagster.yaml. Run, event and schedule storage go to
+# Postgres rather than the default SQLite: the webserver and the daemon are
+# separate containers, and they would contend on a shared SQLite file.
+storage:
+  postgres:
+    postgres_db:
+      username:
+        env: DAGSTER_PG_USERNAME
+      password:
+        env: DAGSTER_PG_PASSWORD
+      hostname:
+        env: DAGSTER_PG_HOST
+      db_name:
+        env: DAGSTER_PG_DB
+      port: 5432
+
+telemetry:
+  enabled: false

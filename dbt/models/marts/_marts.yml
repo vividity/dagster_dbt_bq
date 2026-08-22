@@ -1,0 +1,36 @@
+version: 2
+
+models:
+  - name: fct_orders
+    description: "One row per order, with payments rolled up to an order total."
+    columns:
+      - name: order_id
+        description: "Primary key."
+        data_tests:
+          - unique
+          - not_null
+      - name: customer_id
+        description: "FK to dim_customers."
+        data_tests:
+          - not_null
+      - name: amount_usd
+        description: "Sum of all payments against the order, in USD. 0 if unpaid."
+        data_tests:
+          - not_null
+
+  - name: dim_customers
+    description: "Customer dimension enriched with lifetime order history."
+    columns:
+      - name: customer_id
+        description: "Primary key."
+        data_tests:
+          - unique
+          - not_null
+      - name: number_of_orders
+        description: "Lifetime count of orders placed. 0 for customers who never ordered."
+        data_tests:
+          - not_null
+      - name: lifetime_amount_usd
+        description: "Lifetime payment total in USD. 0 for customers who never ordered."
+        data_tests:
+          - not_null

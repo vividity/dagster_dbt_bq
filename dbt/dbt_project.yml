@@ -1,0 +1,49 @@
+# The project may not be called `dbt_bigquery` — that name is reserved by the
+# BigQuery adapter — so the repo is dagster_dbt_bq and the dbt project is
+# bq_analytics.
+name: 'bq_analytics'
+version: '1.0.0'
+config-version: 2
+profile: 'bq_analytics'
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  bq_analytics:
+    staging:
+      +materialized: view
+      +schema: staging
+    marts:
+      +materialized: table
+      +schema: marts
+
+seeds:
+  bq_analytics:
+    # Pin types so BigQuery loads the raw CSVs deterministically rather than
+    # inferring them differently between environments.
+    raw_customers:
+      +column_types:
+        id: int64
+        first_name: string
+        last_name: string
+    raw_orders:
+      +column_types:
+        id: int64
+        user_id: int64
+        order_date: date
+        status: string
+    raw_payments:
+      +column_types:
+        id: int64
+        order_id: int64
+        payment_method: string
+        amount: int64

@@ -1,0 +1,20 @@
+# Repo-local dbt profile, selected by --profiles-dir dbt (see the Makefile).
+#
+# Auth is a service account. The key lives OUTSIDE this repo
+# (~/.config/dagster-dbt-bq/sa-key.json by default) and is bind-mounted into the
+# container read-only at /var/secrets/google, so no credential can ever reach
+# the working tree. Only the path arrives here, via DBT_BIGQUERY_KEYFILE.
+bq_analytics:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery
+      method: service-account
+      keyfile: "{{ env_var('DBT_BIGQUERY_KEYFILE') }}"
+      project: "{{ env_var('DBT_BIGQUERY_PROJECT', 'your-gcp-project') }}"
+      dataset: "{{ env_var('DBT_BIGQUERY_DATASET', 'dbt_dev') }}"
+      location: "{{ env_var('DBT_BIGQUERY_LOCATION', 'US') }}"
+      threads: 4
+      priority: interactive
+      job_execution_timeout_seconds: 300
+      job_retries: 1

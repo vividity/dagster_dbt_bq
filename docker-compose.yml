@@ -1,0 +1,60 @@
+# All three services share one image and one env file. Start with `make up`.
+x-dagster-common: &dagster-common
+  build:
+    context: .
+    args:
+      APP_UID: "${APP_UID:-1000}"
+      APP_GID: "${APP_GID:-1000}"
+  image: dagster-dbt-bq:local
+  environment:
+    DAGSTER_HOME: /opt/dagster/home
+    DAGSTER_PG_HOST: postgres
+    DAGSTER_PG_DB: dagster
+    DAGSTER_PG_USERNAME: dagster
+    DAGSTER_PG_PASSWORD: dagster
+    # dbt reads these through env_var() in dbt/profiles.yml.
+    DBT_BIGQUERY_PROJECT: "${GCP_PROJECT:-your-gcp-project}"
+    DBT_BIGQUERY_DATASET: "${DBT_BIGQUERY_DATASET:-dbt_dev}"
+    DBT_BIGQUERY_LOCATION: "${DBT_BIGQUERY_LOCATION:-US}"
+    # Service-account key, mounted read-only from outside the repo. The key
+    # itself never enters the working tree, so it cannot be committed.
+    DBT_BIGQUERY_KEYFILE: /var/secrets/google/sa-key.json
+    GOOGLE_APPLICATION_CREDENTIALS: /var/secrets/google/sa-key.json
+    GOOGLE_CLOUD_PROJECT: "${GCP_PROJECT:-your-gcp-project}"
+  volumes:
+    - ./dagster.yaml:/opt/dagster/home/dagster.yaml:ro
+    - ./src:/opt/dagster/app/src
+    - ./dbt:/opt/dagster/app/dbt
+    - ./tests:/opt/dagster/app/tests
+    - ${SA_KEY_DIR:?run via make, which defaults it to $$HOME/.config/dagster-dbt-bq}:/var/secrets/google:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: dagster
+      POSTGRES_PASSWORD: dagster
+      POSTGRES_DB: dagster
+    volumes:
+      - dagster-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dagster"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  dagster-webserver:
+    <<: *dagster-common
+    command: ["dagster-webserver", "-h", "0.0.0.0", "-p", "3000"]
+    ports:
+      - "${DAGSTER_PORT:-3000}:3000"
+
+  dagster-daemon:
+    <<: *dagster-common
+    command: ["dagster-daemon", "run"]
+
+volumes:
+  dagster-postgres:
